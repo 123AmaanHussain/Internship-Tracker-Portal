@@ -1,0 +1,341 @@
+const express = require('express');
+const router = express.Router();
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const { pool } = require('../config/db');
+require('dotenv').config();
+
+// Demo users for testing (only used if database connection fails)
+const demoUsers = [
+  {
+    userId: 1001,
+    email: 'demo.student@example.com',
+    password: '$2b$10$X/hX1LzRSgD7UFFOtHqKQ.aUPqRVjAa1VdIZ6qJMFBYOZ3ZB2yBu2', // hashed 'demostudent123'
+    userType: 'student'
+  },
+  {
+    userId: 2001,
+    email: 'demo.company@example.com',
+    password: '$2b$10$8GQfWPBuUBLHBzQpKC6Z0eOXleV9iqM9t0/.wFnWYYD5GrMXyGpYy', // hashed 'democompany123'
+    userType: 'company'
+  },
+  {
+    userId: 3001,
+    email: 'admin@example.com',
+    password: '$2b$10$KNvhBIJOKjcKdmLyX1CQNu1sDNGnpUGBZOlUy3YrTXzj.1hbmMIjK', // hashed 'admin123'
+    userType: 'admin'
+  },
+  {
+    userId: 3002,
+    email: 'admin@gmail.com',
+    password: '$2b$10$wJbSkEG4FGm/Dqmqhvcyj.vpKh8EKh.TBgRcQkvPkbGSRqGf1X9Aq', // hashed 'admin@123'
+    userType: 'admin'
+  },
+  {
+    userId: 4001,
+    email: 'demo.college@example.com',
+    password: '$2b$10$KNvhBIJOKjcKdmLyX1CQNu1sDNGnpUGBZOlUy3YrTXzj.1hbmMIjK', // hashed 'democollege123'
+    userType: 'college'
+  }
+];
+
+// In-memory storage for registered users during the session (fallback)
+const registeredUsers = [...demoUsers];
+
+// Register a new user
+router.post('/register', async (req, res) => {
+  console.log('Register request received:', req.body);
+  const { email, password, userType, companyName, industry, website, location, description, 
+          firstName, lastName, collegeName, degree, graduationYear } = req.body;
+  
+  try {
+    // Check if user already exists
+    const [existingUsers] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
+    
+    if (existingUsers.length > 0) {
+      return res.status(400).json({ message: 'User already exists' });
+    }
+    
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+    
+    // Begin transaction
+    await pool.query('START TRANSACTION');
+    
+    // Create user
+    const [result] = await pool.query(
+      'INSERT INTO users (email, password, user_type) VALUES (?, ?, ?)',
+      [email, hashedPassword, userType]
+    );
+    
+    const userId = result.insertId;
+    
+    // Create profile based on user type
+    if (userType === 'company') {
+      // Use provided company details or defaults
+      const company = {
+        name: companyName || email.split('@')[0],
+        industry: industry || 'Not specified',
+        website: website || '',
+        location: location || '',
+        description: description || 'Pending company profile'
+      };
+      
+      await pool.query(
+        'INSERT INTO company_profiles (user_id, company_name, industry, website, location, description, approved) VALUES (?, ?, ?, ?, ?, ?, false)',
+        [userId, company.name, company.industry, company.website, company.location, company.description]
+      );
+    } else if (userType === 'college') {
+      const college = {
+        name: collegeName || email.split('@')[0],
+        location: location || 'Not specified',
+        website: website || '',
+        description: description || 'Pending college profile'
+      };
+      
+      await pool.query(
+        'INSERT INTO college_profiles (user_id, college_name, location, website, description, approved) VALUES (?, ?, ?, ?, ?, false)',
+        [userId, college.name, college.location, college.website, college.description]
+      );
+      
+      console.log('Created pending college profile for user:', userId);
+    }
+    
+    // If userType is student, create student profile and check for college association
+    if (userType === 'student') {
+      // Create basic student profile if details are provided
+      if (firstName && lastName) {
+        await pool.query(
+          'INSERT INTO student_profiles (user_id, first_name, last_name, college, degree, graduation_year) VALUES (?, ?, ?, ?, ?, ?)',
+          [userId, firstName, lastName, collegeName || 'Not specified', degree || 'Not specified', graduationYear || new Date().getFullYear() + 4]
+        );
+        
+        const [studentProfile] = await pool.query(
+          'SELECT profile_id FROM student_profiles WHERE user_id = ?',
+          [userId]
+        );
+        
+        const studentId = studentProfile[0].profile_id;
+        
+        // Extract email domain to check for college association
+        const emailDomain = email.split('@')[1];
+        
+        // Check if any college has this email domain
+        const [colleges] = await pool.query(
+          'SELECT cp.profile_id, cp.college_name FROM college_profiles cp JOIN users u ON cp.user_id = u.user_id WHERE u.email LIKE ?',
+          [`%@${emailDomain}`]
+        );
+        
+        // If a matching college is found, associate the student with that college
+        if (colleges.length > 0) {
+          const collegeId = colleges[0].profile_id;
+          const collegeName = colleges[0].college_name;
+          
+          // Add student to college_students table
+          await pool.query(
+            'INSERT INTO college_students (college_id, student_id, verification_status) VALUES (?, ?, ?)',
+            [collegeId, studentId, 'pending']
+          );
+          
+          console.log(`Associated student ${studentId} with college ${collegeId} (${collegeName})`);
+        } else {
+          // If no direct match, check if the email domain contains any college name
+          const [allColleges] = await pool.query('SELECT profile_id, college_name FROM college_profiles');
+          
+          for (const college of allColleges) {
+            // Convert college name to lowercase and remove spaces for comparison
+            const simplifiedCollegeName = college.college_name.toLowerCase().replace(/\s+/g, '');
+            const simplifiedEmailDomain = emailDomain.toLowerCase();
+            
+            if (simplifiedEmailDomain.includes(simplifiedCollegeName)) {
+              // Add student to college_students table
+              await pool.query(
+                'INSERT INTO college_students (college_id, student_id, verification_status) VALUES (?, ?, ?)',
+                [college.profile_id, studentId, 'pending']
+              );
+              
+              console.log(`Associated student ${studentId} with college ${college.profile_id} (${college.college_name}) based on email domain`);
+              break;
+            }
+          }
+        }
+      }
+    }
+    
+    // Commit transaction
+    await pool.query('COMMIT');
+    
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId, email, userType },
+      process.env.JWT_SECRET || 'fallbacksecretkey',
+      { expiresIn: '24h' }
+    );
+    
+    // Get Socket.io instance and emit real-time updates
+    const io = req.app.get('io');
+    if (io) {
+      // Emit to admin dashboard
+      io.to('admin-dashboard').emit('user-registered', {
+        userId,
+        email,
+        userType,
+        timestamp: new Date()
+      });
+      
+      // Emit to specific user type rooms
+      if (userType === 'student') {
+        io.to('admin').emit('new-student', { userId, email });
+      } else if (userType === 'company') {
+        io.to('admin').emit('new-company', { userId, email, status: 'pending' });
+      } else if (userType === 'college') {
+        io.to('admin').emit('new-college', { userId, email });
+      }
+      
+      // Emit updated stats
+      try {
+        const [stats] = await pool.query(`
+          SELECT 
+            (SELECT COUNT(*) FROM student_profiles) as students,
+            (SELECT COUNT(*) FROM company_profiles) as companies,
+            (SELECT COUNT(*) FROM internships) as internships,
+            (SELECT COUNT(*) FROM applications) as applications,
+            (SELECT COUNT(*) FROM company_profiles WHERE approved = false) as pendingCompanies
+        `);
+        
+        io.to('admin-dashboard').emit('stats-updated', {
+          students: stats[0].students,
+          companies: stats[0].companies,
+          internships: stats[0].internships,
+          applications: stats[0].applications,
+          pendingCompanies: stats[0].pendingCompanies
+        });
+      } catch (statsError) {
+        console.error('Error fetching updated stats:', statsError);
+      }
+    }
+    
+    console.log('User registered successfully:', { userId, email, userType });
+    res.status(201).json({
+      message: userType === 'company' 
+        ? 'Company registered successfully. Awaiting admin approval.' 
+        : userType === 'college'
+          ? 'College registered successfully. Awaiting admin approval.'
+          : 'User registered successfully',
+      token,
+      user: { userId, email, userType }
+    });
+  } catch (error) {
+    console.error('Registration error:', error);
+    
+    // Rollback transaction on error
+    await pool.query('ROLLBACK');
+    
+    res.status(500).json({ message: 'Server error during registration' });
+  }
+});
+
+// Login user
+router.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+  
+  if (!email || !password) {
+    return res.status(400).json({ message: 'Email and password are required' });
+  }
+  
+  try {
+    // Check if user exists in the database
+    const [users] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
+    
+    if (users.length === 0) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+    
+    const user = users[0];
+    
+    // Compare passwords
+    const isMatch = await bcrypt.compare(password, user.password);
+    
+    if (!isMatch) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+    
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: user.user_id, email: user.email, userType: user.user_type },
+      process.env.JWT_SECRET || 'fallbacksecretkey',
+      { expiresIn: '24h' }
+    );
+    
+    res.json({
+      message: 'Login successful',
+      token,
+      user: {
+        userId: user.user_id,
+        email: user.email,
+        userType: user.user_type
+      }
+    });
+  } catch (error) {
+    console.error('Login error:', error);
+    
+    // Fallback to in-memory if database fails
+    try {
+      const user = registeredUsers.find(user => user.email === email);
+      
+      if (!user) {
+        return res.status(401).json({ message: 'Invalid credentials' });
+      }
+      
+      const isMatch = await bcrypt.compare(password, user.password);
+      
+      if (!isMatch) {
+        return res.status(401).json({ message: 'Invalid credentials' });
+      }
+      
+      const token = jwt.sign(
+        { userId: user.userId, email: user.email, userType: user.userType },
+        process.env.JWT_SECRET || 'fallbacksecretkey',
+        { expiresIn: '24h' }
+      );
+      
+      console.log('Login successful (fallback mode)');
+      res.json({
+        message: 'Login successful (fallback mode)',
+        token,
+        user: {
+          userId: user.userId,
+          email: user.email,
+          userType: user.userType
+        }
+      });
+    } catch (fallbackError) {
+      console.error('Fallback login error:', fallbackError);
+      res.status(500).json({ message: 'Server error during login' });
+    }
+  }
+});
+
+// Get all users (admin only)
+router.get('/users', async (req, res) => {
+  try {
+    // Get all users from database
+    const [users] = await pool.query('SELECT user_id, email, user_type, created_at FROM users');
+    
+    res.json({ users });
+  } catch (error) {
+    console.error('Error fetching users:', error);
+    
+    // Fallback to in-memory if database fails
+    const users = registeredUsers.map(user => ({
+      userId: user.userId,
+      email: user.email,
+      userType: user.userType
+    }));
+    
+    res.json({ users, fallback: true });
+  }
+});
+
+module.exports = router;

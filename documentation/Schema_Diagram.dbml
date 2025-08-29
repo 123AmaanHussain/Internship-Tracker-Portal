@@ -1,0 +1,110 @@
+// Digital Internship & Placement Portal Database Schema
+// DBML format - can be visualized at https://dbdiagram.io/
+
+Table users {
+  user_id int [pk, increment]
+  email varchar(255) [not null, unique]
+  password varchar(255) [not null]
+  user_type enum('student', 'company', 'college', 'admin') [not null]
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`]
+  
+  Note: 'Stores authentication information for all system users'
+}
+
+Table student_profiles {
+  profile_id int [pk, increment]
+  user_id int [ref: > users.user_id, not null]
+  first_name varchar(100) [not null]
+  last_name varchar(100) [not null]
+  college varchar(255) [not null]
+  degree varchar(100) [not null]
+  graduation_year int [not null]
+  skills text
+  phone varchar(20)
+  bio text
+  resume_url varchar(255)
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`]
+  
+  Note: 'Stores detailed information about student users'
+}
+
+Table company_profiles {
+  profile_id int [pk, increment]
+  user_id int [ref: > users.user_id, not null]
+  company_name varchar(255) [not null]
+  industry varchar(100) [not null]
+  website varchar(255)
+  location varchar(255)
+  description text
+  logo_url varchar(255)
+  approved boolean [default: false]
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`]
+  
+  Note: 'Stores detailed information about company users'
+}
+
+Table college_profiles {
+  profile_id int [pk, increment]
+  user_id int [ref: > users.user_id, not null]
+  college_name varchar(255) [not null]
+  location varchar(255) [not null]
+  website varchar(255)
+  description text
+  contact_email varchar(255)
+  contact_phone varchar(20)
+  approved boolean [default: false]
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`]
+  
+  Note: 'Stores detailed information about college users'
+}
+
+Table internships {
+  internship_id int [pk, increment]
+  company_id int [ref: > company_profiles.profile_id, not null]
+  title varchar(255) [not null]
+  description text [not null]
+  requirements text [not null]
+  location varchar(255) [not null]
+  stipend varchar(100)
+  duration varchar(100) [not null]
+  application_deadline date [not null]
+  status enum('open', 'closed', 'filled') [default: 'open']
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`]
+  
+  Note: 'Stores information about internship opportunities posted by companies'
+}
+
+Table applications {
+  application_id int [pk, increment]
+  internship_id int [ref: > internships.internship_id, not null]
+  student_id int [ref: > student_profiles.profile_id, not null]
+  status enum('pending', 'shortlisted', 'rejected', 'selected') [default: 'pending']
+  application_date timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`]
+  
+  indexes {
+    (internship_id, student_id) [unique, name: 'unique_application']
+  }
+  
+  Note: 'Tracks student applications for internships'
+}
+
+Table college_students {
+  id int [pk, increment]
+  college_id int [ref: > college_profiles.profile_id, not null]
+  student_id int [ref: > student_profiles.profile_id, not null]
+  verification_status enum('pending', 'verified', 'rejected') [default: 'pending']
+  added_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`]
+  
+  indexes {
+    (college_id, student_id) [unique, name: 'unique_college_student']
+  }
+  
+  Note: 'Tracks relationships between colleges and their students'
+}

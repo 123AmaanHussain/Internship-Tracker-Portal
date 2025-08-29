@@ -1,0 +1,97 @@
+@startuml Digital Internship & Placement Portal ER Diagram
+
+' Entity definitions with attributes
+entity "USERS" as users {
+  *USER_ID : NUMBER <<PK>>
+  --
+  *EMAIL : VARCHAR2(100) <<unique>>
+  *PASSWORD : VARCHAR2(100)
+  *USER_TYPE : VARCHAR2(20)
+  CREATED_AT : TIMESTAMP
+}
+
+entity "STUDENTS" as students {
+  *STUDENT_ID : NUMBER <<PK>>
+  --
+  *USER_ID : NUMBER <<FK>>
+  *FIRST_NAME : VARCHAR2(50)
+  *LAST_NAME : VARCHAR2(50)
+  COLLEGE : VARCHAR2(100)
+  DEGREE : VARCHAR2(50)
+  GRADUATION_YEAR : NUMBER(4)
+  SKILLS : VARCHAR2(500)
+  RESUME_URL : VARCHAR2(255)
+  PHONE : VARCHAR2(15)
+  BIO : VARCHAR2(1000)
+}
+
+entity "COMPANIES" as companies {
+  *COMPANY_ID : NUMBER <<PK>>
+  --
+  *USER_ID : NUMBER <<FK>>
+  *COMPANY_NAME : VARCHAR2(100)
+  INDUSTRY : VARCHAR2(100)
+  LOCATION : VARCHAR2(100)
+  WEBSITE : VARCHAR2(255)
+  DESCRIPTION : VARCHAR2(1000)
+  LOGO_URL : VARCHAR2(255)
+  APPROVED : NUMBER(1)
+}
+
+entity "INTERNSHIPS" as internships {
+  *INTERNSHIP_ID : NUMBER <<PK>>
+  --
+  *COMPANY_ID : NUMBER <<FK>>
+  *TITLE : VARCHAR2(100)
+  *DESCRIPTION : VARCHAR2(2000)
+  REQUIREMENTS : VARCHAR2(1000)
+  LOCATION : VARCHAR2(100)
+  TYPE : VARCHAR2(20)
+  DURATION : VARCHAR2(50)
+  STIPEND : VARCHAR2(50)
+  APPLICATION_DEADLINE : DATE
+  POSTED_DATE : TIMESTAMP
+  STATUS : VARCHAR2(20)
+}
+
+entity "APPLICATIONS" as applications {
+  *APPLICATION_ID : NUMBER <<PK>>
+  --
+  *STUDENT_ID : NUMBER <<FK>>
+  *INTERNSHIP_ID : NUMBER <<FK>>
+  APPLY_DATE : TIMESTAMP
+  STATUS : VARCHAR2(20)
+  COVER_LETTER : VARCHAR2(2000)
+  LAST_UPDATED : TIMESTAMP
+}
+
+' Relationships
+users ||--o| students : has
+users ||--o| companies : has
+companies ||--|{ internships : posts
+students ||--|{ applications : submits
+internships ||--|{ applications : receives
+
+note bottom of users
+  USER_TYPE must be one of:
+  'student', 'company', or 'admin'
+end note
+
+note bottom of internships
+  TYPE must be one of:
+  'remote', 'onsite', or 'hybrid'
+  
+  STATUS must be one of:
+  'open' or 'closed'
+end note
+
+note bottom of applications
+  STATUS must be one of:
+  'applied', 'shortlisted', 'interview',
+  'selected', or 'rejected'
+  
+  Unique constraint on
+  (STUDENT_ID, INTERNSHIP_ID)
+end note
+
+@enduml
